@@ -1,54 +1,55 @@
+"""Pipeline that stores each scraped agent into a SQLite database."""
 
-import re
+import os
 import json
+import sqlite3
 
-class CleanPipeline:
-    """Normalize phones, social keys, lists, and trim strings."""
+class SQLiteStorePipeline:
+    """
+    Stores each scraped item in a SQLite database.
+
+    Features:
+    - Creates output/ folder automatically.
+    - Ensures one unique row per profile_url.
+    - Saves cleaned JSON into the `data` column.
+    """
+
+    def open_spider(self, spider):
+        """Initialize the SQLite database when the spider starts."""
+        os.makedirs("output", exist_ok=True)
+
+        # Connect to database
+        self.conn = sqlite3.connect("output/ewm_agents.db")
+        self.cursor = self.conn.cursor()
+
+        # Create table for agents
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_url TEXT UNIQUE,
+                data TEXT
+            )
+            """
+        )
+        self.conn.commit()
 
     def process_item(self, item, spider):
-        def clean_number(s):
-            if not s:
-                return ""
-            s = s.strip()
-            num = re.sub(r"[^\d+]", "", s)
-            return num
+        """Insert or update a scraped item into SQLite."""
+        profile_url = item.get("profile_url", "")
+        item_json = json.dumps(dict(item), ensure_ascii=False)
 
-        def clean_phone_list(lst):
-            if not lst:
-                return []
-            cleaned = []
-            for p in lst:
-                if not p:
-                    continue
-                cleaned_p = clean_number(p)
-                if cleaned_p:
-                    cleaned.append(cleaned_p)
-            return cleaned
-
-        item['office_phone_numbers'] = clean_phone_list(item.get('office_phone_numbers') or [])
-        item['agent_phone_numbers'] = clean_phone_list(item.get('agent_phone_numbers') or [])
-
-        social = item.get('social') or {}
-        social.setdefault('facebook_url', "")
-        social.setdefault('twitter_url', "")
-        social.setdefault('linkedin_url', "")
-        item['social'] = social
-        langs = item.get('languages')
-        if langs is None:
-            item['languages'] = []
-        elif isinstance(langs, list):
-            item['languages'] = [l.strip() for l in langs if isinstance(l, str) and l.strip()]
-        else:
-            item['languages'] = [langs.strip()] if isinstance(langs, str) and langs.strip() else []
-
-        for k, v in list(item.items()):
-            if isinstance(v, str):
-                item[k] = v.strip()
-        
-            if v is None:
-                if k in ('office_phone_numbers', 'agent_phone_numbers', 'languages'):
-                    item[k] = []
-                else:
-                    item[k] = ""
+        self.cursor.execute(
+            """
+            INSERT OR REPLACE INTO agents (profile_url, data)
+            VALUES (?, ?)
+            """,
+            (profile_url, item_json),
+        )
+        self.conn.commit()
 
         return item
+
+    def close_spider(self, spider):
+        """Close the SQLite database connection when finished."""
+        self.conn.close()
